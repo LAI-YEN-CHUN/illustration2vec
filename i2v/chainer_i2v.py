@@ -1,20 +1,27 @@
-from i2v.base import Illustration2VecBase
 import json
 import warnings
-import numpy as np
-from scipy.ndimage import zoom
-from skimage.transform import resize
+from distutils.version import StrictVersion
+
 import chainer
+import numpy as np
 from chainer import Variable
 from chainer.functions import average_pooling_2d, sigmoid
-from chainer.links.caffe import CaffeFunction
+from scipy.ndimage import zoom
+from skimage.transform import resize
+
+from .base import Illustration2VecBase
+
+try:
+    from chainer.functions.caffe import CaffeFunction
+except:
+    # from chainer.links.caffe import CaffeFunction
+    from chainer.links.caffe.caffe_function import CaffeFunction
 
 
 class ChainerI2V(Illustration2VecBase):
-
     def __init__(self, *args, **kwargs):
         super(ChainerI2V, self).__init__(*args, **kwargs)
-        mean = np.array([ 164.76139251,  167.47864617,  181.13838569])
+        mean = np.array([164.76139251, 167.47864617, 181.13838569])
         self.mean = mean
 
     def resize_image(self, im, new_dims, interp_order=1):
@@ -25,12 +32,11 @@ class ChainerI2V(Illustration2VecBase):
                 # skimage is fast but only understands {1,3} channel images
                 # in [0, 1].
                 im_std = (im - im_min) / (im_max - im_min)
-                resized_std = resize(im_std, new_dims, order=interp_order, mode='constant')
+                resized_std = resize(im_std, new_dims, order=interp_order)
                 resized_im = resized_std * (im_max - im_min) + im_min
             else:
                 # the image is a constant -- avoid divide by 0
-                ret = np.empty((new_dims[0], new_dims[1], im.shape[-1]),
-                               dtype=np.float32)
+                ret = np.empty((new_dims[0], new_dims[1], im.shape[-1]), dtype=np.float32)
                 ret.fill(im_min)
                 return ret
         else:
@@ -48,8 +54,14 @@ class ChainerI2V(Illustration2VecBase):
         input_ -= self.mean  # subtract mean
         input_ = input_.transpose((0, 3, 1, 2))  # (N, H, W, C) -> (N, C, H, W)
         x = Variable(input_)
-        with chainer.using_config('train', False), chainer.using_config('enable_backprop', False):
-            y, = self.net(inputs={'data': x}, outputs=[layername])
+
+        # train argument is not supported from Ver2.
+        if StrictVersion(chainer.__version__) < StrictVersion('2.0.0'):
+            (y,) = self.net(inputs={'data': x}, outputs=[layername], train=False)
+        else:
+            chainer.using_config('train', False)
+            (y,) = self.net(inputs={'data': x}, outputs=[layername])
+
         return y
 
     def _extract(self, inputs, layername):
@@ -66,6 +78,7 @@ class ChainerI2V(Illustration2VecBase):
             y = self._forward(inputs, layername)
             return y.data
 
+
 def make_i2v_with_chainer(param_path, tag_path=None, threshold_path=None):
     # ignore UserWarnings from chainer
     with warnings.catch_warnings():
@@ -75,7 +88,7 @@ def make_i2v_with_chainer(param_path, tag_path=None, threshold_path=None):
     kwargs = {}
     if tag_path is not None:
         tags = json.loads(open(tag_path, 'r').read())
-        assert(len(tags) == 1539)
+        assert len(tags) == 1539
         kwargs['tags'] = tags
 
     if threshold_path is not None:
